@@ -1,0 +1,202 @@
+image: hashicorp/terraform:0.14.4
+
+stages:
+  - terraform:init
+  - terraform:check
+  - terraform:plan
+  - terraform:apply
+
+#############################
+#   TERRAFORM - INIT
+#############################
+
+terraform-init-dev:
+  stage: "terraform:init"
+  only:
+    - "dev"
+  variables:
+    TF_WORKSPACE: development
+    TF_IN_AUTOMATION: 1
+    AWS_ACCESS_KEY_ID: $ACCESS_KEY_PROD_AND_TFSTATE
+    AWS_SECRET_ACCESS_KEY: $SECRET_KEY_PROD_AND_TFSTATE
+  script:
+    - terraform init -input=false terraform/
+  artifacts:
+    name: "terraform-init-dev:${CI_JOB_ID}"
+    when: "on_success"
+    expire_in: "6h"
+    paths:
+      - .terraform
+      - .terraform.lock.hcl
+  allow_failure: false
+
+terraform-init-prod:
+  stage: "terraform:init"
+  only:
+    - "master"
+  variables:
+    TF_WORKSPACE: production
+    TF_IN_AUTOMATION: 1
+    AWS_ACCESS_KEY_ID: $ACCESS_KEY_PROD_AND_TFSTATE
+    AWS_SECRET_ACCESS_KEY: $SECRET_KEY_PROD_AND_TFSTATE
+  script:
+    - terraform init -input=false terraform/
+  artifacts:
+    name: "terraform-init-prod:${CI_JOB_ID}"
+    when: "on_success"
+    expire_in: "6h"
+    paths:
+      - .terraform
+      - .terraform.lock.hcl
+  allow_failure: false
+
+#############################
+#   TERRAFORM - CHECK
+#############################
+
+terraform-check-dev:
+  stage: "terraform:check"
+  only:
+    - "dev"
+  dependencies:
+    - terraform-init-dev
+  script:
+    - terraform fmt -check -recursive terraform/
+    - terraform validate terraform/
+  allow_failure: false
+  needs:
+    - job: terraform-init-dev
+      artifacts: true
+
+terraform-check-prod:
+  stage: "terraform:check"
+  only:
+    - "master"
+  dependencies:
+    - terraform-init-prod
+  script:
+    - terraform fmt -check -recursive terraform/
+    - terraform validate terraform/
+  allow_failure: false
+  needs:
+    - job: terraform-init-prod
+      artifacts: true
+
+#############################
+#   TERRAFORM - PLAN
+#############################
+
+terraform-plan-dev:
+  stage: "terraform:plan"
+  only:
+    - "dev"
+  extends:
+    - terraform-init-dev
+  dependencies:
+    - "terraform-init-dev"
+    - "terraform-check-dev"
+  variables:
+    SCW_ACCESS_KEY: $ACCESS_KEY_DEV
+    SCW_SECRET_KEY: $SECRET_KEY_DEV
+    TF_VAR_scw_bucket_access_key: $BUCKET_ACCESS_KEY_DEV
+    TF_VAR_scw_bucket_secret_key: $BUCKET_SECRET_KEY_DEV
+    TF_VAR_smtp_address: $SMTP_ADDRESS
+    TF_VAR_smtp_port: $SMTP_PORT
+    TF_VAR_smtp_username: $SMTP_USERNAME
+    TF_VAR_smtp_password: $SMTP_PASSWORD
+    TF_VAR_domain: $DOMAIN
+  script:
+    - terraform plan -out=tfplan --var-file terraform/terraform.tfvars terraform/
+  artifacts:
+    name: "terraform-plan-dev:${CI_JOB_ID}"
+    when: "on_success"
+    expire_in: "6h"
+    paths:
+      - tfplan
+  allow_failure: false
+  needs:
+    - job: terraform-check-dev
+    - job: terraform-init-dev
+      artifacts: true
+
+terraform-plan-prod:
+  stage: "terraform:plan"
+  only:
+    - "master"
+  extends:
+    - terraform-init-prod
+  dependencies:
+    - "terraform-init-prod"
+    - "terraform-check-prod"
+  variables:
+    SCW_ACCESS_KEY: $ACCESS_KEY_PROD_AND_TFSTATE
+    SCW_SECRET_KEY: $SECRET_KEY_PROD_AND_TFSTATE
+    TF_VAR_scw_bucket_access_key: $BUCKET_ACCESS_KEY_PROD
+    TF_VAR_scw_bucket_secret_key: $BUCKET_SECRET_KEY_PROD
+    TF_VAR_smtp_address: $SMTP_ADDRESS
+    TF_VAR_smtp_port: $SMTP_PORT
+    TF_VAR_smtp_username: $SMTP_USERNAME
+    TF_VAR_smtp_password: $SMTP_PASSWORD
+    TF_VAR_domain: $DOMAIN
+  script:
+    - terraform plan -out=tfplan --var-file terraform/terraform.tfvars terraform/
+  artifacts:
+    name: "terraform-plan-prod:${CI_JOB_ID}"
+    when: "on_success"
+    expire_in: "6h"
+    paths:
+      - tfplan
+  allow_failure: false
+  needs:
+    - job: terraform-check-prod
+    - job: terraform-init-prod
+      artifacts: true
+
+#############################
+#   TERRAFORM - APPLY
+#############################
+
+apply-dev:
+  image: registry.example.com/example-group-name/kub-ci-tf-scw-kctl-image:latest
+  stage: "terraform:apply"
+  only:
+    - "dev"
+  extends:
+    - terraform-init-dev
+    - terraform-plan-dev
+  dependencies:
+    - "terraform-init-dev"
+    - "terraform-plan-dev"
+  variables:
+    TF_CLI_ARGS_apply: "-parallelism=3 -auto-approve"
+  script:
+    - terraform apply ./tfplan
+  allow_failure: false
+  needs:
+    - job: terraform-init-dev
+      artifacts: true
+    - job: terraform-plan-dev
+      artifacts: true
+
+apply-prod:
+  image: registry.example.com/example-group-name/kub-ci-tf-scw-kctl-image:latest
+  stage: "terraform:apply"
+  when: manual
+  only:
+    - "master"
+  extends:
+    - terraform-init-prod
+    - terraform-plan-prod
+  dependencies:
+    - "terraform-init-prod"
+    - "terraform-plan-prod"
+  variables:
+    TF_CLI_ARGS_apply: "-parallelism=3 -auto-approve"
+  script:
+    - terraform apply ./tfplan
+  allow_failure: false
+  needs:
+    - job: terraform-init-prod
+      artifacts: true
+    - job: terraform-plan-prod
+      artifacts: true
