@@ -1,0 +1,25 @@
+apiVersion: traefik.containo.us/v1alpha1
+kind: IngressRoute
+metadata:
+  name: bookstack-https-ingressroute
+  labels:
+    app: bookstack
+    environment: production
+    resourceType: ingressroute
+  namespace: bookstack
+spec:
+  entrypoint:
+    - websecure
+  routes:
+    - kind: Rule
+      match: Host(`wiki.example.com`) && PathPrefix(`/`)
+      services:
+        - kind: Service
+          name: bookstack-service
+          port: 80
+  tls:
+    secretName: tls-cert
+    option:
+      - namespace: bookstack
+    domain:
+      - main: example.com
